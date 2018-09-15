@@ -1,71 +1,68 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
-func TestHas(t *testing.T) {
-	db := NewReflux()
-	assert.False(t, db.Has("foo"), `Has("foo") should be false`)
-
-	db = &Reflux{
-		Data:  map[string]string{"foo": "bar"},
-		Counts: map[string]int{"bar": 1},
-	}
-	assert.True(t, db.Has("foo"), `Has("foo") should be true`)
+func Flush(b *strings.Builder) string {
+	s := b.String()
+	b.Reset()
+	return s
 }
 
-func TestGet(t *testing.T) {
-	db := NewReflux()
-	assert.Equal(t, "", db.Get("foo"), `Get("foo") should be ""`)
-
-	db = &Reflux{
-		Data:  map[string]string{"foo": "bar"},
-		Counts: map[string]int{"bar": 1},
-	}
-	assert.Equal(t, "bar", db.Get("foo"), `Get("foo") should be "bar"`)
-
-	db = &Reflux{
-		Data:  map[string]string{"foo": "baz"},
-		Counts: map[string]int{"baz": 1},
-	}
-	assert.Equal(t, "baz", db.Get("foo"), `Get("foo") should be "baz"`)
+func TestCounts(t *testing.T) {
+	db := NewRefluxDb()
+	b := &strings.Builder{}
+	db.DoGet("a", b)
+	assert.Equal(t, "NULL\n", Flush(b), "unexpected output value")
+	db.DoSet("a", "foo")
+	db.DoSet("b", "foo")
+	db.DoCount("foo", b)
+	assert.Equal(t, "2\n", Flush(b), "unexpected output value")
+	db.DoCount("bar", b)
+	assert.Equal(t, "0\n", Flush(b), "unexpected output value")
+	db.DoDelete("a")
+	db.DoCount("foo", b)
+	assert.Equal(t, "1\n", Flush(b), "unexpected output value")
+	db.DoSet("b", "baz")
+	db.DoCount("foo", b)
+	assert.Equal(t, "0\n", Flush(b), "unexpected output value")
+	db.DoGet("b", b)
+	assert.Equal(t, "baz\n", Flush(b), "unexpected output value")
+	db.DoGet("B", b)
+	assert.Equal(t, "NULL\n", Flush(b), "unexpected output value")
 }
 
-func TestSet(t *testing.T) {
-	db := NewReflux()
+func TestBasicTransaction(t *testing.T) {
+	db := NewRefluxDb()
+	b := &strings.Builder{}
 
-	db.Set("foo", "bar")
-	assert.Equal(t, "bar", db.Data["foo"], `"bar" should be value for key "foo"`)
-	assert.Equal(t, 1, db.Counts["bar"], `1 should be count for value "bar"`)
-
-	db.Set("flo", "bar")
-	assert.Equal(t, "bar", db.Data["flo"], `"bar" should be value for key "flo"`)
-	assert.Equal(t, 2, db.Counts["bar"], `2 should be count for value "bar"`)
-
-	db.Set("foo", "baz")
-	assert.Equal(t, "baz", db.Data["foo"], `"baz" should be value for key "foo"`)
-	assert.Equal(t, 1, db.Counts["baz"], `1 should be count for value "baz"`)
-	assert.Equal(t, 1, db.Counts["bar"], `1 should be count for value "bar"`)
-
-	db.Set("flo", "bat")
-	assert.Equal(t, 0, db.Counts["bar"], `0 should be count for value "bar"`)
+	db.DoBegin()
+	db.DoSet("a", "foo")
+	db.DoGet("a", b)
+	assert.Equal(t, "foo\n", Flush(b), "unexpected output value")
+	db.DoBegin()
+	db.DoSet("a", "bar")
+	db.DoGet("a", b)
+	assert.Equal(t, "bar\n", Flush(b), "unexpected output value")
+	db.DoRollback(b)
+	db.DoGet("a", b)
+	assert.Equal(t, "foo\n", Flush(b), "unexpected output value")
+	db.DoRollback(b)
+	db.DoGet("a", b)
+	assert.Equal(t, "NULL\n", Flush(b), "unexpected output value")
 }
 
-func TestDelete(t *testing.T) {
-	db := &Reflux{
-		Data:  map[string]string{"foo": "bar", "flo": "bar", "fla": "baz"},
-		Counts: map[string]int{"bar": 2, "baz": 1},
-	}
+func TestRollbackWithoutTransaction(t *testing.T) {
+	db := NewRefluxDb()
+	b := &strings.Builder{}
 
-	db.Delete("foo")
-	assert.Equal(t, "", db.Data["foo"], `"" should be value for key "foo"`)
-	assert.Equal(t, 1, db.Counts["bar"], `1 should be count for value "bar"`)
-	assert.Equal(t, 1, db.Counts["baz"], `1 should be count for value "baz"`)
-
-	db.Delete("flo")
-	assert.Equal(t, "", db.Data["flo"], `"" should be value for key "foo"`)
-	assert.Equal(t, 0, db.Counts["bar"], `0 should be count for value "bar"`)
+	db.DoSet("a", "foo")
+	db.DoRollback(b)
+	assert.Equal(t, "TRANSACTION NOT FOUND\n", Flush(b), "unexpected output value")
+	db.DoGet("a", b)
+	assert.Equal(t, "foo\n", Flush(b), "unexpected output value")
 }
